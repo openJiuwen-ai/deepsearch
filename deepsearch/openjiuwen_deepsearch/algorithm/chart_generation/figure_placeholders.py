@@ -22,6 +22,62 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 
 logger = logging.getLogger(__name__)
 
+_H1_LINE_RE = re.compile(r"^#\s+(.+?)\s*$")
+_H2_LINE_RE = re.compile(r"^##\s+(.+?)\s*$")
+_FENCE_LINE_RE = re.compile(r"^\s*(```|~~~)")
+_CHAPTER_TITLE_RE = re.compile(
+    r"^(第\s*[0-9一二三四五六七八九十百千]+\s*[章节篇]"
+    r"|[0-9]+\s*[.、)）]"
+    r"|chapter\s+\d+"
+    r"|part\s+\d+)",
+    re.IGNORECASE,
+)
+_EXCLUDED_TITLES = frozenset(
+    {
+        "目录",
+        "table of contents",
+        "contents",
+        "摘要",
+        "abstract",
+        "结论",
+        "conclusion",
+        "参考文章",
+        "参考文献",
+        "reference articles",
+        "references",
+    }
+)
+
+
+def _split_by_heading(content: str, pattern: "re.Pattern[str]") -> List[Dict[str, str]]:
+    """按标题行切分 *content*，返回 ``[{"title", "content"}, ...]``。
+
+    用正则 match 的偏移量切片，而不是 ``content.find(title)``：后者永远命中
+    title 的第一次出现，遇到重复标题时后续章节的 content 会错位甚至为空。
+    围栏代码块（``` / ~~~）内的行不参与切分，避免把 ``# 注释`` 当成标题。
+    """
+    blocks: List[Dict[str, str]] = []
+    in_fence = False
+    offset = 0
+    current = None
+
+    for line in content.splitlines(keepends=True):
+        if _FENCE_LINE_RE.match(line):
+            in_fence = not in_fence
+        elif not in_fence:
+            match = pattern.match(line.rstrip("\r\n"))
+            if match:
+                if current is not None:
+                    current["content"] = content[current.pop("_start"):offset].strip()
+                current = {"title": match.group(1).strip(), "_start": offset + len(line)}
+                blocks.append(current)
+        offset += len(line)
+
+    if current is not None:
+        current["content"] = content[current.pop("_start"):].strip()
+
+    return blocks
+
 
 class FigurePlaceholderGenerator:
     """图表占位符生成器"""
@@ -101,62 +157,22 @@ class FigurePlaceholderGenerator:
                 - title: 一级标题
                 - content: 章节内容
         """
-        # 使用正则按一级标题 (# 标题) 分割
-        # 匹配 # 标题 或 第一章 这样的格式
-        h1_pattern = re.compile(r"^(#{1}\s+.+)$", re.MULTILINE)
-
-        parts = h1_pattern.split(report_content)
-        sections = []
-
-        # 第一个部分通常是报告标题和摘要，从-1开始编号，摘要后的正文第一章为1，如果没有#开头
-        current_index = -1
-
-        # 找出所有一级标题
-        h1_matches = h1_pattern.findall(report_content)
-
-        if not h1_matches:
+        blocks = _split_by_heading(report_content, _H1_LINE_RE)
+        if not blocks:
             # 没有一级标题，将整个报告作为一个块
             return [{"index": 1, "title": "全文", "content": report_content}]
 
-        # 按一级标题分割内容
-        for i, title in enumerate(h1_matches):
-            # 找到标题后的内容
-            title_start = report_content.find(title)
-            if i + 1 < len(h1_matches):
-                title_end = report_content.find(h1_matches[i + 1])
-            else:
-                title_end = len(report_content)
-
-            content = report_content[title_start + len(title):title_end].strip()
-
-            # 清理标题中的#号
-            clean_title = title.lstrip("#").strip()
-
-            sections.append(
-                {"index": current_index, "title": clean_title, "content": content}
-            )
-            current_index += 1
-
-        # 过滤报告标题及非正文 H1。目录是报告正文中的额外 H1，不能依赖
-        # 固定位置切片，否则会把摘要当成正文首章并使章节索引整体偏移。
-        excluded_titles = {
-            "目录",
-            "table of contents",
-            "contents",
-            "摘要",
-            "abstract",
-            "结论",
-            "conclusion",
-            "参考文章",
-            "参考文献",
-            "reference articles",
-            "references",
-        }
         report_sections = []
-        for section in sections[1:]:
+        for position, section in enumerate(blocks):
             normalized_title = re.sub(r"\s+", " ", section["title"]).strip().casefold()
-            if normalized_title not in excluded_titles:
-                report_sections.append(section)
+            if normalized_title in _EXCLUDED_TITLES:
+                continue
+            # 首个 H1 通常是报告标题（不带章节号）。若正文直接从"第一章 / 1."开始，
+            # 说明报告没有总标题，此时不能按位置把它当标题丢掉。
+            if position == 0 and not _CHAPTER_TITLE_RE.match(section["title"]):
+                continue
+            report_sections.append(section)
+
         for index, section in enumerate(report_sections, start=1):
             section["index"] = index
 
@@ -169,37 +185,27 @@ class FigurePlaceholderGenerator:
         section_content = section.get("content", "")
         index = section.get("index", -1)
         
-        h2_pattern = re.compile(r"^(#{2}\s+.+)$", re.MULTILINE)
-
-        sub_sections = []
-
-        # 找出所有二级标题
-        h2_matches = h2_pattern.findall(section_content)
-
-        if not h2_matches:
+        blocks = _split_by_heading(section_content, _H2_LINE_RE)
+        if not blocks:
             # 没有二级标题，将整个章节作为一个块
-            sub_section = {"index": index, "index_h2": 0, 
-                           "title": section.get("title", ""), 
-                           "content": section.get("content", "")}
-            return [sub_section]
+            return [
+                {
+                    "index": index,
+                    "index_h2": 0,
+                    "title": section.get("title", ""),
+                    "content": section_content,
+                }
+            ]
 
-        # 按一级标题分割内容
-        for i, title in enumerate(h2_matches):
-            # 找到标题后的内容
-            title_start = section_content.find(title)
-            if i + 1 < len(h2_matches):
-                title_end = section_content.find(h2_matches[i + 1])
-            else:
-                title_end = len(section_content)
-
-            content = section_content[title_start + len(title):title_end].strip()
-
-            # 清理标题中的#号
-            clean_title = title.lstrip("#").strip()
-
-            sub_sections.append(
-                {"index": index, "index_h2": i, "title": clean_title, "content": content}
-            )
+        sub_sections = [
+            {
+                "index": index,
+                "index_h2": position,
+                "title": block["title"],
+                "content": block["content"],
+            }
+            for position, block in enumerate(blocks)
+        ]
 
         logger.info(f"Split section_{index} into {len(sub_sections)} sub_sections by H2")
         return sub_sections
