@@ -303,6 +303,16 @@ def _prepare_batches(
             yield future.result()
 
 
+def _copy_path_literal(path: Path) -> str:
+    """把路径转成 COPY 语句里可内联的字符串字面量内容。
+
+    COPY 不支持参数绑定，路径只能拼进 SQL：统一用 ``/`` 分隔（Windows 反斜杠在
+    语句里可能被当作转义），并把 ``"`` 转义成 ``""``，否则含引号的临时目录会让语句
+    语法错误。
+    """
+    return str(path).replace("\\", "/").replace('"', '""')
+
+
 def _copy_batch_files(
     conn: Any,
     table_name: str,
@@ -310,7 +320,8 @@ def _copy_batch_files(
     progress: Any | None = None,
 ) -> None:
     for csv_path in csv_paths:
-        conn.execute(f"""COPY {table_name} FROM "{csv_path}" (PARALLEL=FALSE, QUOTE='"', ESCAPE='"')""")
+        escaped = _copy_path_literal(csv_path)
+        conn.execute(f"""COPY {table_name} FROM "{escaped}" (PARALLEL=FALSE, QUOTE='"', ESCAPE='"')""")
         csv_path.unlink(missing_ok=True)
         if progress is not None:
             progress.update()
