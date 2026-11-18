@@ -1,9 +1,23 @@
 """Shared tree-sitter helpers used by multiple language parsers."""
 
+import posixpath
 from tree_sitter import Node
 
 from ..constants import MAX_AST_DEPTH
 from ..custom_types import SourceSpan
+
+
+def module_path(root: str, folder_rel: str) -> str:
+    """Join *root* and *folder_rel* with forward slashes on every platform.
+
+    ``ModuleInfo.path`` is compared against and persisted next to POSIX-style
+    paths, so it must not depend on ``os.sep``: ``str(Path(root) / folder_rel)``
+    yields ``\\root\\a\\b`` on Windows and breaks downstream comparisons.
+    """
+    root = root.replace("\\", "/")
+    if not folder_rel:
+        return root
+    return posixpath.join(root, folder_rel.replace("\\", "/"))
 
 
 def text(node: Node) -> str:

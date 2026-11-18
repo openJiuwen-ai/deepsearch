@@ -2,10 +2,10 @@
 
 import re
 from functools import cached_property
-from pathlib import Path
 
 from ...custom_types import ModuleInfo
 from .. import LanguageHooks
+from .._common import module_path
 
 _GENERIC_RE = re.compile(r"^([\w:]+)\s*<")
 _LIFETIME_RE = re.compile(r"'\w+\s*")
@@ -290,5 +290,5 @@ class RustHooks(LanguageHooks):
         if not ({"mod.rs", "lib.rs", "main.rs"} & file_names):
             return []
         name = folder_rel.replace("/", "::") if folder_rel else "crate"
-        path = str(Path(root) / folder_rel) if folder_rel else root
+        path = module_path(root, folder_rel)
         return [ModuleInfo(name=name, language="rust", path=path)]
