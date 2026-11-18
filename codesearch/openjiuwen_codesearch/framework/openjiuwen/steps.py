@@ -403,25 +403,70 @@ async def resolver_tool_step(ctx: CodeResolveRunContext) -> Optional[Termination
     return None
 
 
-def finalize_resolve(ctx: CodeResolveRunContext, termination: Termination) -> CodeResolveResult:
+def collect_repo_diff(repo_dir: str) -> str:
+    """收集工作区相对 HEAD 的完整 diff（含未跟踪的新文件），不改写 git 索引。
+
+    旧实现是 ``git add -A`` → ``git diff --cached`` → ``git reset``：``add -A`` 会把
+    未跟踪文件（可能含密钥、构建产物）一并塞进 patch，随后的 ``git reset`` 又抹掉了
+    用户原本已暂存的内容——注释说"避免污染用户的 index"，实际是覆盖它。
+    """
+    import os
     import subprocess
 
+    diff = subprocess.run(
+        ["git", "diff", "HEAD", "--binary"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if diff.returncode == 0:
+        patch = diff.stdout
+    else:
+        # 空仓库没有 HEAD：分别取工作区与暂存区的 diff
+        patch = subprocess.run(
+            ["git", "diff", "--binary"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        patch += subprocess.run(
+            ["git", "diff", "--cached", "--binary"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    for relative_path in untracked.stdout.splitlines():
+        relative_path = relative_path.strip()
+        if not relative_path:
+            continue
+        new_file = subprocess.run(
+            ["git", "diff", "--no-index", "--binary", "--", os.devnull, relative_path],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        patch += new_file.stdout
+    return patch
+
+
+def finalize_resolve(ctx: CodeResolveRunContext, termination: Termination) -> CodeResolveResult:
     git_logger = logging.getLogger(__name__)
 
     final_diff = ""
     try:
-        subprocess.run(["git", "add", "-A"], cwd=ctx.repo_dir, check=True)
-        result = subprocess.run(
-            ["git", "diff", "--cached"],
-            cwd=ctx.repo_dir,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        final_diff = result.stdout
-
-        # Unstage everything we just staged so we don't pollute the user's git index
-        subprocess.run(["git", "reset"], cwd=ctx.repo_dir, capture_output=True, check=False)
+        final_diff = collect_repo_diff(ctx.repo_dir)
     except Exception as e:
         git_logger.error(f"Failed to get diff: {e}")
 
