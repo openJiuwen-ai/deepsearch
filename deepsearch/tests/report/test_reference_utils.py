@@ -3,6 +3,7 @@ import pytest
 from openjiuwen_deepsearch.algorithm.report.report import (
     Reporter,
     _deduplicate_and_renumber_ref,
+    _deduplicate_and_renumber_refs,
     _replace_citations_and_classified_index,
 )
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
@@ -61,10 +62,24 @@ def test_deduplicate_and_renumber_with_multiple_paragraphs_and_sections():
     # 应该有两个不同的引用
     assert "[1] First reference" in result
     assert "[2] Second reference" in result
-    # 映射应区分段落
+    # 映射按"空行分隔的引用块"给出段落号，不再随空行数量漂移
     assert mapping["1-1"] == 1  # 第一段第一条
-    assert mapping["3-1"] == 2  # 第三段第一条（任何一个\n都算作开始了一个新的段落）
-    assert mapping["3-2"] == 1  # 第三段第二条重复了第一段的内容
+    assert mapping["2-1"] == 2  # 第二段第一条
+    assert mapping["2-2"] == 1  # 第二段第二条重复了第一段的内容
+
+
+def test_deduplicate_and_renumber_refs_paragraph_ids_match_block_order():
+    # 引用块内部有空行时，旧实现会把段落号推成 3，与消费端 f"{i + 1}-{index}" 对不上
+    blocks = ["[1] A\n\n[2] B", "[1] C"]
+    _, mapping = _deduplicate_and_renumber_refs(blocks)
+    assert mapping == {"1-1": 1, "1-2": 2, "2-1": 3}
+
+
+def test_deduplicate_and_renumber_refs_skips_empty_blocks():
+    blocks = ["", "[1] A", ""]
+    result, mapping = _deduplicate_and_renumber_refs(blocks)
+    assert result == "[1] A"
+    assert mapping == {"2-1": 1}
 
 
 def test_deduplicate_and_renumber_with_ignore_lines_without_reference():
@@ -122,3 +137,36 @@ def test_deduplicate_and_renumber_with_ignore_lines_without_reference():
 def test_replace_citations_and_classified_index(paragraphs, classified_contents, ref_map, expected):
     result = _replace_citations_and_classified_index(paragraphs, classified_contents, ref_map)
     assert result == expected
+
+
+def test_replace_citations_is_not_cascaded():
+    # 第二段：1->2（重复引用）、2->3（新引用）。逐条 re.sub 会把 [citation:1]
+    # 先换成 [citation:2]，再把刚生成的 [citation:2] 换成 [citation:3]。
+    _, ref_map = _deduplicate_and_renumber_refs(["[1] x\n[2] y", "[1] y\n[2] z"])
+    assert ref_map == {"1-1": 1, "1-2": 2, "2-1": 2, "2-2": 3}
+
+    paragraphs = ["P0 [citation:1] [citation:2]", "P1 [citation:1] [citation:2]"]
+    classified = [
+        [{"index": 1, "content": "x"}, {"index": 2, "content": "y"}],
+        [{"index": 1, "content": "y"}, {"index": 2, "content": "z"}],
+    ]
+    updated_paragraphs, updated_classified = _replace_citations_and_classified_index(
+        paragraphs, classified, ref_map
+    )
+    assert updated_paragraphs == [
+        "P0 [citation:1] [citation:2]",
+        "P1 [citation:2] [citation:3]",
+    ]
+    assert [[item["index"] for item in c] for c in updated_classified] == [[1, 2], [2, 3]]
+
+
+def test_replace_citations_uses_paragraph_id_from_block_order():
+    # 生产者按段落顺序编号后，第二段的重编号不再因为空行而失效
+    _, ref_map = _deduplicate_and_renumber_refs(["[1] a\n\n[2] b", "[1] c"])
+    paragraphs = ["P0 [citation:1]", "P1 [citation:1]"]
+    classified = [[{"index": 1, "content": "a"}], [{"index": 1, "content": "c"}]]
+    updated_paragraphs, updated_classified = _replace_citations_and_classified_index(
+        paragraphs, classified, ref_map
+    )
+    assert updated_paragraphs == ["P0 [citation:1]", "P1 [citation:3]"]
+    assert updated_classified[1][0]["index"] == 3
