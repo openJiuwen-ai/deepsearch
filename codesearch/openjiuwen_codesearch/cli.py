@@ -77,12 +77,14 @@ async def _run(args: argparse.Namespace) -> int:
                 ["git", "diff", "--cached", "--quiet"], cwd=args.repo_dir, capture_output=True
             )
             if diff_check.returncode != 0:
+                # 索引里已有用户的暂存内容。finalize 阶段改为 git diff HEAD + 未跟踪文件，
+                # 不再需要（也不再允许）清空索引，这里只提示不修改。
                 logger.warning(
-                    "Found staged changes in repo-dir '%s'. Unstaging them before starting coder...", args.repo_dir
+                    "Repo-dir '%s' already has staged changes; they will not be modified.",
+                    args.repo_dir,
                 )
-                subprocess.run(["git", "reset"], cwd=args.repo_dir, capture_output=True, check=False)
         except Exception as e:
-            logger.warning("Could not check or unstage changes in '%s': %s", args.repo_dir, e)
+            logger.warning("Could not inspect staged changes in '%s': %s", args.repo_dir, e)
 
         from openjiuwen_codesearch.api.coder import CodeResolver
         resolver = CodeResolver(
